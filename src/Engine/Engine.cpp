@@ -1276,127 +1276,149 @@ std::vector<std::set<LinesConv>> getOrderedConvergence(const DocCmpInfo& doc1, c
 
 			intptr_t linesProgress = 0;
 
-			for (intptr_t line1 = startLine; line1 < endLine; ++line1)
+			constexpr int similarityRange = 50;
+
+			intptr_t line1start = startLine;
+			intptr_t line2start = 0;
+
+			intptr_t line1end = std::min(line1start + similarityRange, endLine);
+			intptr_t line2end = std::min(line2start + similarityRange, linesCount2);
+
+			while (line1start < endLine && line2start < linesCount2)
 			{
-				if (chunk1[line1].empty())
-				{
-					linesProgress += linesCount2;
-					continue;
-				}
+				intptr_t maxLine2 = line2start;
 
-				std::vector<Word> words1;
-
-				for (intptr_t line2 = 0; line2 < linesCount2; ++line2)
+				for (intptr_t line1 = line1start; line1 < line1end; ++line1)
 				{
-					if (chunk2[line2].empty())
+					if (chunk1[line1].empty())
 					{
-						++linesProgress;
+						linesProgress += linesCount2;
 						continue;
 					}
 
-					const intptr_t minSize = std::min(chunk1[line1].size(), chunk2[line2].size());
-					const intptr_t maxSize = std::max(chunk1[line1].size(), chunk2[line2].size());
-
-					if (((minSize * 100) / maxSize) < options.changedThresholdPercent)
+					for (intptr_t line2 = line2start; line2 < line2end; ++line2)
 					{
-						++linesProgress;
-						continue;
-					}
-
-					intptr_t matchesCount	= 0;
-					intptr_t diffsCount		= 0;
-
-					auto charDiffs = DiffCalc<Char>(chunk1[line1], chunk2[line2])();
-
-					const intptr_t charDiffsSize = static_cast<intptr_t>(charDiffs.first.size());
-
-					for (intptr_t i = 0; i < charDiffsSize; ++i)
-					{
-						if (charDiffs.first[i].type == diff_type::DIFF_MATCH)
+						if (chunk2[line2].empty())
 						{
-							matchesCount += charDiffs.first[i].len;
+							++linesProgress;
+							continue;
 						}
-						else if (options.bestSeqChangedLines)
+
+						const intptr_t minSize = std::min(chunk1[line1].size(), chunk2[line2].size());
+						const intptr_t maxSize = std::max(chunk1[line1].size(), chunk2[line2].size());
+
+						if (((minSize * 100) / maxSize) < options.changedThresholdPercent)
 						{
-							++diffsCount;
-
-							// Count replacement as a single diff
-							if ((i + 1 < charDiffsSize) && (charDiffs.first[i + 1].type == diff_type::DIFF_IN_2))
-								++i;
+							++linesProgress;
+							continue;
 						}
-					}
 
-					if (((matchesCount * 100) / maxSize) >= options.changedThresholdPercent)
-					{
-						const float lineConvergence = (static_cast<float>(matchesCount) * 100) / maxSize;
+						intptr_t matchesCount	= 0;
+						intptr_t diffsCount		= 0;
 
-						Conv conv(lineConvergence, diffsCount);
+						auto charDiffs = DiffCalc<Char>(chunk1[line1], chunk2[line2])();
+
+						const intptr_t charDiffsSize = static_cast<intptr_t>(charDiffs.first.size());
+
+						for (intptr_t i = 0; i < charDiffsSize; ++i)
+						{
+							if (charDiffs.first[i].type == diff_type::DIFF_MATCH)
+							{
+								matchesCount += charDiffs.first[i].len;
+							}
+							else if (options.bestSeqChangedLines)
+							{
+								++diffsCount;
+
+								// Count replacement as a single diff
+								if ((i + 1 < charDiffsSize) && (charDiffs.first[i + 1].type == diff_type::DIFF_IN_2))
+									++i;
+							}
+						}
+
+						if (((matchesCount * 100) / maxSize) >= options.changedThresholdPercent)
+						{
+							const float lineConvergence = (static_cast<float>(matchesCount) * 100) / maxSize;
+
+							Conv conv(lineConvergence, diffsCount);
 
 #if defined(MULTITHREAD) && (MULTITHREAD != 0)
-						std::lock_guard<std::mutex> lock(mtx);
+							std::lock_guard<std::mutex> lock(mtx);
 #endif
 
-						if (progress && !progress->Advance(linesProgress + 1))
-							return;
+							if (progress && !progress->Advance(linesProgress + 1))
+								return;
 
-						linesProgress = 0;
+							linesProgress = 0;
 
-						bool addL1C = false;
+							bool addL1C = false;
 
-						if (lines2Convergence[line2].empty() || (conv == lines2Convergence[line2].begin()->conv))
-						{
-							lines2Convergence[line2].emplace(conv, line1, line2);
-							addL1C = true;
-						}
-						else if (conv > lines2Convergence[line2].begin()->conv)
-						{
-							for (const auto& l2c : lines2Convergence[line2])
+							if (lines2Convergence[line2].empty() || (conv == lines2Convergence[line2].begin()->conv))
 							{
-								auto& l1c = lines1Convergence[l2c.line1];
-
-								if (!l1c.empty())
+								lines2Convergence[line2].emplace(conv, line1, line2);
+								addL1C = true;
+							}
+							else if (conv > lines2Convergence[line2].begin()->conv)
+							{
+								for (const auto& l2c : lines2Convergence[line2])
 								{
-									for (auto l1cI = l1c.begin(); l1cI != l1c.end(); ++l1cI)
+									auto& l1c = lines1Convergence[l2c.line1];
+
+									if (!l1c.empty())
 									{
-										if (l1cI->line2 == line2)
+										for (auto l1cI = l1c.begin(); l1cI != l1c.end(); ++l1cI)
 										{
-											l1c.erase(l1cI);
-											break;
+											if (l1cI->line2 == line2)
+											{
+												l1c.erase(l1cI);
+												break;
+											}
 										}
 									}
 								}
+
+								lines2Convergence[line2].clear();
+								lines2Convergence[line2].emplace(conv, line1, line2);
+								addL1C = true;
 							}
 
-							lines2Convergence[line2].clear();
-							lines2Convergence[line2].emplace(conv, line1, line2);
-							addL1C = true;
-						}
+							if (addL1C)
+							{
+								if (lines1Convergence[line1].empty() || (conv == lines1Convergence[line1].begin()->conv))
+								{
+									lines1Convergence[line1].emplace(conv, line1, line2);
+								}
+								else if (conv > lines1Convergence[line1].begin()->conv)
+								{
+									lines1Convergence[line1].clear();
+									lines1Convergence[line1].emplace(conv, line1, line2);
+								}
 
-						if (addL1C)
+								line1start = line1;
+
+								if (maxLine2 < line2)
+									maxLine2 = line2;
+							}
+						}
+						else
 						{
-							if (lines1Convergence[line1].empty() || (conv == lines1Convergence[line1].begin()->conv))
-							{
-								lines1Convergence[line1].emplace(conv, line1, line2);
-							}
-							else if (conv > lines1Convergence[line1].begin()->conv)
-							{
-								lines1Convergence[line1].clear();
-								lines1Convergence[line1].emplace(conv, line1, line2);
-							}
-						}
-					}
-					else
-					{
 #if defined(MULTITHREAD) && (MULTITHREAD != 0)
-						std::lock_guard<std::mutex> lock(mtx);
+							std::lock_guard<std::mutex> lock(mtx);
 #endif
 
-						if (progress && !progress->Advance(linesProgress + 1))
-							return;
+							if (progress && !progress->Advance(linesProgress + 1))
+								return;
 
-						linesProgress = 0;
+							linesProgress = 0;
+						}
 					}
 				}
+
+				++line1start;
+				line2start = maxLine2 + 1;
+
+				line1end = std::min(line1start + similarityRange, endLine);
+				line2end = std::min(line2start + similarityRange, linesCount2);
 			}
 		};
 
